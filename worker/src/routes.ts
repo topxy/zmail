@@ -374,5 +374,89 @@ app.get('/api/debug/db', (c) => {
     dbMethods: c.env.DB ? Object.keys(c.env.DB) : []
   });
 });
+// 创建邮箱并返回完整信息（适合自动化程序）
+app.get('/api/create-mailbox', async (c) => {
+  try {
+    const expiresInHours = 24; // 固定24小时有效期
+    
+    // 获取客户端IP
+    const ip = c.req.header('CF-Connecting-IP') || 'unknown';
+    
+    // 生成随机地址
+    const address = generateRandomAddress();
+    
+    // 创建邮箱
+    const mailbox = await createMailbox(c.env.DB, {
+      address,
+      expiresInHours,
+      ipAddress: ip,
+    });
+    
+    // 从请求头中获取域名信息
+    const host = c.req.header('host') || '';
+    // 假设域名是 API URL 的第二段，否则使用默认域名
+    const domain = host.split('.').slice(1).join('.') || 'mdzz.uk';
+    
+    // 计算过期时间（毫秒）
+    const expiryDate = new Date(mailbox.expiresAt * 1000).toISOString();
+    
+    return c.json({
+      success: true,
+      address: mailbox.address,
+      email: `${mailbox.address}@${domain}`,
+      domain: domain,
+      createdAt: new Date(mailbox.createdAt * 1000).toISOString(),
+      expiresAt: expiryDate,
+      expiresInHours: expiresInHours
+    });
+  } catch (error) {
+    console.error('创建邮箱失败:', error);
+    return c.json({ 
+      success: false, 
+      error: '创建邮箱失败',
+      message: error instanceof Error ? error.message : String(error)
+    }, 500);
+  }
+});
 
+// 获取邮箱的所有邮件（包括详细内容）
+app.get('/api/check-emails/:address', async (c) => {
+  try {
+    const address = c.req.param('address');
+    const mailbox = await getMailbox(c.env.DB, address);
+    
+    if (!mailbox) {
+      return c.json({ success: false, error: '邮箱不存在或已过期' }, 404);
+    }
+    
+    // 获取邮件列表
+    const emails = await getEmails(c.env.DB, mailbox.id);
+    
+    // 获取每封邮件的详细内容
+    const emailsWithDetails = await Promise.all(
+      emails.map(async (emailSummary) => {
+        const emailDetails = await getEmail(c.env.DB, emailSummary.id);
+        return emailDetails;
+      })
+    );
+    
+    // 返回邮箱信息和完整邮件内容
+    return c.json({ 
+      success: true, 
+      mailbox: {
+        address: mailbox.address,
+        createdAt: new Date(mailbox.createdAt * 1000).toISOString(),
+        expiresAt: new Date(mailbox.expiresAt * 1000).toISOString(),
+      },
+      emails: emailsWithDetails
+    });
+  } catch (error) {
+    console.error('获取邮件失败:', error);
+    return c.json({ 
+      success: false, 
+      error: '获取邮件失败',
+      message: error instanceof Error ? error.message : String(error)
+    }, 500);
+  }
+});
 export default app;
